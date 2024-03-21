@@ -1,0 +1,15 @@
+# ImgProxy presets
+
+32w=resizing_type:fill/width:32/format:webp
+32w=resizing_type:fill/width:32/format:webp
+64w=resizing_type:fill/width:64/format:webp
+128w=resizing_type:fill/width:128/format:webp
+256w=resizing_type:fill/width:256/format:webp
+512w=resizing_type:fill/width:512/format:webp
+768w=resizing_type:fill/width:768/format:webp
+1024w=resizing_type:fill/width:1024/format:webp
+1536w=resizing_type:fill/width:1536/format:webp
+1920w=resizing_type:fill/width:1920/format:webp
+2560w=resizing_type:fill/width:2560/format:webp
+3840w=resizing_type:fill/width:3840/format:webp
+full=resizing_type:fill/width:1920/height:1080/format:webp

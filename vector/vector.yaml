@@ -1,0 +1,283 @@
+
+sources:
+  # Docker
+  # docker_logs_source:
+  #   type: "docker_logs"
+  
+  docker_stats_source:
+    type: "exec"
+    command: [ "docker", "stats", "--format", "json", "--no-stream" ]
+    decoding:
+      codec: "bytes"
+    mode: "scheduled"
+    scheduled:
+      exec_interval_secs: 30
+
+  
+  rabbitmq_logs_source
+    type: "file"
+    read_from: "beginning"
+    ignore_older_secs: 600
+    include: ["/var/log/rabbitmq/*.log"]
+    exclude: []
+  
+  rabbitmq_metrics_source:
+    type: "prometheus_scrape"
+    endpoints:
+      - "http://127.20.0.1:15692/metrics" # Endpoint exposing RabbitMQ metrics
+    scrape_interval_secs: 30             # Define how often to scrape
+
+  # Nginx
+  nginx_logs_source:
+    type: "file"
+    read_from: "beginning"
+    ignore_older_secs: 600
+    include: ["/var/log/nginx/*.log"]
+    exclude: []
+
+  nginx_metrics_source:
+    type: "nginx_metrics"
+    endpoints:
+      - "http://172.20.0.1/nginx_status" # endpoint exposing Nginx metrics: http://nginx.org/en/docs/http/ngx_http_stub_status_module.html
+    scrape_interval_secs: 30 # Define how often to scrape
+
+  
+  
+
+  # Host metrics
+  host_metrics_source:
+    type: "host_metrics"
+    scrape_interval_secs: 30
+
+
+transforms:
+  
+
+  nginx_logs_parser:
+    type: "remap"
+    inputs:
+      - "nginx_logs_source"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+      .nginx = parse_regex(.message, r'^\s*(-|(?P<client>\S+))\s+\-\s+(-|(?P<user>\S+))\s+\[(?P<timestamp>.+)\]\s+"(?P<request>(?P<method>\w+)\s+(?P<path>\S+)\s+(?P<protocol>\S+))"\s+(?P<status>\d+)\s+(?P<size>\d+)\s+"(-|(?P<referrer>.+))"\s+"(-|(?P<agent>.+))"\s*') ??
+          parse_regex(.message, r'^\s*(?P<timestamp>.+)\s+\[(?P<severity>\w+)\]\s+(?P<pid>\d+)\#(?P<tid>\d+):\s+\*(?P<cid>\d+)\s+(?P<message>.*)(?:,\s+client:\s+(?P<client>[^,z]+))(?:,\s+server:\s+(?P<server>[^,z]+))(?:,\s+request:\s+"(?P<request>[^"]+)")(?:,\s+subrequest:\s+"(?P<subrequest>[^"]+)")?(?:,\s+upstream:\s+"(?P<upstream>[^"]+)")?(?:,\s+host:\s+"(?P<host>[^"]+)")(?:,\s+referrer:\s+"(?P<referrer>[^"]+)")?\s*') ??
+          parse_nginx_log(.message, format: "combined") ??
+          parse_nginx_log(.message, format: "error") ??
+          {}
+
+      if .nginx != {} {
+        .platform = "Nginx"
+        .level = del(.nginx.severity)
+        .message = del(.nginx.message)
+
+        if is_null(.message) { del(.message) }
+        if exists(.nginx.timestamp) {
+          .dt = format_timestamp!(
+            parse_timestamp(.nginx.timestamp, "%d/%b/%Y:%T %z") ??
+              parse_timestamp(.nginx.timestamp, "%Y/%m/%d %T") ??
+              .dt,
+            "%+"
+          )
+
+          del(.nginx.timestamp)
+        }
+
+        if is_string(.nginx.status) { .nginx.status = to_int(.nginx.status) ?? .nginx.status }
+        if is_string(.nginx.size) { .nginx.size = to_int(.nginx.size) ?? .nginx.size }
+        if is_string(.nginx.cid) { .nginx.cid = to_int(.nginx.cid) ?? .nginx.cid }
+        if is_string(.nginx.pid) { .nginx.pid = to_int(.nginx.pid) ?? .nginx.pid }
+        if is_string(.nginx.tid) { .nginx.tid = to_int(.nginx.tid) ?? .nginx.tid }
+
+        if is_null(.nginx.subrequest) { del(.nginx.subrequest) }
+        if is_null(.nginx.upstream) { del(.nginx.upstream) }
+        if is_null(.nginx.referrer) { del(.nginx.referrer) }
+      } else {
+        del(.nginx)
+      }
+
+
+  nginx_metrics_parser:
+    type: "remap"
+    inputs:
+      - "nginx_metrics_source"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+
+
+
+  docker_metrics_parser:
+    type: "remap"
+    inputs: 
+      - "docker_stats_source"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+      raw_data = .message
+      dt = .timestamp
+      host = .host
+      pid = .pid
+      
+      . = []
+      data, err = parse_json(strip_ansi_escape_codes(string!(raw_data)))
+      if err == null {
+        container_id = data.Container
+        container_name = data.Name
+      
+        gauges = {
+          "cpu_percentage": to_float(replace(data.CPUPerc, "%", "") ?? "") ?? null,
+          "memory_percentage": to_float(replace(data.MemPerc, "%", "") ?? "") ?? null,
+          "memory_used_bytes": split(data.MemUsage, " / ")[0] ?? null,
+          "memory_limit_bytes": split(data.MemUsage, " / ")[1] ?? null,
+          "pids_count": to_int(data.PIDs) ?? null
+        }
+      
+        counters = {
+          "block_in_bytes": split(data.BlockIO, " / ")[0] ?? null,
+          "block_out_bytes": split(data.BlockIO, " / ")[1] ?? null,
+          "network_in_bytes": split(data.NetIO, " / ")[0] ?? null,
+          "network_out_bytes": split(data.NetIO, " / ")[1] ?? null
+        }
+      
+        gauges_bytes = map_values(gauges) -> |data| {
+          if !is_string(data) {
+            data
+          } else {
+            data = string!(data)
+            if !ends_with(data, "B") {
+              data
+            } else if ends_with(data, "TiB") {
+              round(1024 * 1024 * 1024 * 1024 * to_float(replace(data, "TiB", "")) ?? null) ?? null
+            } else if ends_with(data, "GiB") {
+              round(1024 * 1024 * 1024 * to_float(replace(data, "GiB", "")) ?? null) ?? null
+            } else if ends_with(data, "MiB") {
+              round(1024 * 1024 * to_float(replace(data, "MiB", "")) ?? null) ?? null
+            } else if ends_with(data, "KiB") {
+              round(1024 * to_float(replace(data, "KiB", "")) ?? null) ?? null
+            } else if ends_with(data, "TB") {
+              round(1000 * 1000 * 1000 * 1000 * to_float(replace(data, "TB", "")) ?? null) ?? null
+            } else if ends_with(data, "GB") {
+              round(1000 * 1000 * 1000 * to_float(replace(data, "GB", "")) ?? null) ?? null
+            } else if ends_with(data, "MB") {
+              round(1000 * 1000 * to_float(replace(data, "MB", "")) ?? null) ?? null
+            } else if ends_with(data, "kB") {
+              round(1000 * to_float(replace(data, "kB", "")) ?? null) ?? null
+            } else {
+              round(to_int(replace(data, "B", "")) ?? null) ?? null
+            }
+          }
+        }
+      
+        counters_bytes = map_values(counters) -> |data| {
+          if !is_string(data) {
+            data
+          } else {
+            data = string!(data)
+            if !ends_with(data, "B") {
+              data
+            } else if ends_with(data, "TiB") {
+              round(1024 * 1024 * 1024 * 1024 * to_float(replace(data, "TiB", "")) ?? null) ?? null
+            } else if ends_with(data, "GiB") {
+              round(1024 * 1024 * 1024 * to_float(replace(data, "GiB", "")) ?? null) ?? null
+            } else if ends_with(data, "MiB") {
+              round(1024 * 1024 * to_float(replace(data, "MiB", "")) ?? null) ?? null
+            } else if ends_with(data, "KiB") {
+              round(1024 * to_float(replace(data, "KiB", "")) ?? null) ?? null
+            } else if ends_with(data, "TB") {
+              round(1000 * 1000 * 1000 * 1000 * to_float(replace(data, "TB", "")) ?? null) ?? null
+            } else if ends_with(data, "GB") {
+              round(1000 * 1000 * 1000 * to_float(replace(data, "GB", "")) ?? null) ?? null
+            } else if ends_with(data, "MB") {
+              round(1000 * 1000 * to_float(replace(data, "MB", "")) ?? null) ?? null
+            } else if ends_with(data, "kB") {
+              round(1000 * to_float(replace(data, "kB", "")) ?? null) ?? null
+            } else {
+              round(to_int(replace(data, "B", "")) ?? null) ?? null
+            }
+          }
+        }
+      
+        for_each(gauges_bytes) -> |name, value| {
+          . = push(., {
+            "name": name,
+            "kind": "absolute",
+            "gauge": {
+              "value": value
+            },
+            "tags": {
+              "pid": to_string!(pid),
+              "host": to_string!(host),
+              "container_id": to_string!(container_id),
+              "container_name": to_string!(container_name)
+            },
+            "dt": dt
+          })
+        }
+      
+        for_each(counters_bytes) -> |name, value| {
+          . = push(., {
+            "name": name,
+            "kind": "absolute",
+            "counter": {
+              "value": value
+            },
+            "tags": {
+              "pid": to_string!(pid),
+              "host": to_string!(host),
+              "container_id": to_string!(container_id),
+              "container_name": to_string!(container_name)
+            },
+            "dt": dt
+          })
+        }
+      }
+
+
+sinks:
+  
+  better_stack_nginx_logs_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${NGINX_LOGS_BEARER_TOKEN}"
+    inputs: ["nginx_logs_parser"]
+
+  better_stack_nginx_metrics_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/metrics"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${NGINX_METRICS_BEARER_TOKEN}"
+    inputs: ["nginx_metrics_parser","host_metrics_source"]
+
+
+  # better_stack_docker_logs_sink:
+  #   type: "http"
+  #   method: "post"
+  #   uri: "https://in.logs.betterstack.com/"
+  #   encoding:
+  #     codec: "json"
+  #   auth:
+  #     strategy: "bearer"
+  #     token: ""
+  #   inputs: ["docker_logs_parser"]
+
+  better_stack_docker_metrics_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/metrics"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${DOCKER_METRICS_BEARER_TOKEN}"
+    inputs: ["docker_metrics_parser","host_metrics_source"]
+
