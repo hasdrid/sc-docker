@@ -21,7 +21,7 @@ services:
       VECTOR_DOCKER_LOGS_BEARER_TOKEN: ${VECTOR_DOCKER_LOGS_BEARER_TOKEN}
       VECTOR_RABBITMQ_METRICS_BEARER_TOKEN: ${VECTOR_RABBITMQ_METRICS_BEARER_TOKEN}
       VECTOR_RABBITMQ_LOGS_BEARER_TOKEN: ${VECTOR_RABBITMQ_LOGS_BEARER_TOKEN}
-      VECROR_REDIS_METRICS_BEARER_TOKEN: ${VECROR_REDIS_METRICS_BEARER_TOKEN}
+      VECTOR_REDIS_METRICS_BEARER_TOKEN: ${VECTOR_REDIS_METRICS_BEARER_TOKEN}
       VECTOR_REDIS_LOGS_BEARER_TOKEN: ${VECTOR_REDIS_LOGS_BEARER_TOKEN}
     restart: unless-stopped
     volumes:
@@ -43,6 +43,19 @@ services:
     restart: unless-stopped
     ports:
       - 6379:6379
+    networks:
+      - my-custom-network
+
+  # This is used to monitor the redis instance and feed the logs into vector.
+  redis_exporter:
+    image: oliver006/redis_exporter
+    environment:
+      - REDIS_ADDR=redis://redis:6379
+    depends_on:
+      - redis
+    networks:
+      - my-custom-network
+
 
   qdrant:
     image: "qdrant/qdrant"
@@ -71,13 +84,13 @@ services:
       - my-custom-network
 
   # This simple nginx is only used to serve the challenge files for certbot and to redirect http to https
-  nginx-http:
+  nginx_http:
     image: nginx
     ports:
       - 80:80
     volumes:
       - ./data/certbot/www:/var/www/certbot:ro
-      - ./nginx-http/default.conf:/etc/nginx/conf.d/default.conf:ro
+      - ./nginx_http/default.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
       - my-custom-network
 
@@ -93,18 +106,18 @@ services:
       - ./data/certbot/www:/var/www/certbot
       - /var/run/docker.sock:/var/run/docker.sock
     depends_on:
-      - nginx-http
+      - nginx_http
     networks:
       - my-custom-network
 
   # This nginx is used to serve the actual API via https. It needs the 
-  nginx-https:
+  nginx_https:
     image: nginx
     ports:
       - 443:443
     volumes:
       - ./data/certbot/conf:/etc/letsencrypt
-      - ./nginx-https/default.conf.template:/etc/nginx/templates/default.conf.template
+      - ./nginx_https/default.conf.template:/etc/nginx/templates/default.conf.template
     environment:
       - NGINX_HTTPS_SERVER_NAME=${NGINX_HTTPS_SERVER_NAME}
     networks:

@@ -13,33 +13,23 @@ sources:
     scheduled:
       exec_interval_secs: 60
 
-  
-  # rabbitmq_logs_source
-  #   type: "file"
-  #   read_from: "beginning"
-  #   ignore_older_secs: 600
-  #   include: ["/var/log/rabbitmq/*.log"]
-  #   exclude: []
-  
   rabbitmq_metrics_source:
     type: "prometheus_scrape"
     endpoints:
-      - "http://rabbitmq:15692/metrics" # Endpoint exposing RabbitMQ metrics
-    scrape_interval_secs: 60             # Define how often to scrape
+      - "http://rabbitmq:15692/metrics"       # Endpoint exposing RabbitMQ metrics
+    scrape_interval_secs: 60                  # Define how often to scrape
 
-  # Nginx
-  # nginx_logs_source:
-  #   type: "file"
-  #   read_from: "beginning"
-  #   ignore_older_secs: 600
-  #   include: ["/var/log/nginx/*.log"]
-  #   exclude: []
+  redis_metrics_source:
+    type: "prometheus_scrape"
+    endpoints:
+      - "http://redis_exporter:9121/metrics"  # Endpoint exposing redis_exporter metrics
+    scrape_interval_secs: 60                  # Define how often to scrape
 
   nginx_metrics_source:
     type: "nginx_metrics"
     endpoints:
       # endpoint exposing Nginx metrics: http://nginx.org/en/docs/http/ngx_http_stub_status_module.html
-      - "http://nginx-https/nginx_status"
+      - "http://nginx_https/nginx_status"
     scrape_interval_secs: 60 # Define how often to scrape
 
   # Host metrics
@@ -70,13 +60,15 @@ transforms:
     inputs:
       - docker_logs_cleaner
     route:
-      nginx_http_logs: .dc_service == "nginx-http"
-      nginx_https_logs: .dc_service == "nginx-https"
+      nginx_http_logs: .dc_service == "nginx_http"
+      nginx_https_logs: .dc_service == "nginx_https"
       certbot_logs: .dc_service == "certbot"
       rabbitmq_logs: .dc_service == "rabbitmq"
+      redis_logs: .dc_service == "redis"
+      redis_exporter_logs: .dc_service == "redis_exporter"
       qdrant_logs: .dc_service == "qdrant"
       imgproxy_logs: .dc_service == "imgproxy"
-
+      # misc: true
 
   # Parse nginx logs, both http and https nginx services.
   nginx_logs_parser:
@@ -321,6 +313,94 @@ transforms:
       del(.source_type)
       .dt = del(.timestamp)
 
+
+  redis_log_parser:
+    type: "remap"
+    inputs: 
+      - "docker_logs_router.redis_logs"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+      .redis = parse_regex(.message, r'^(?P<pid>\d+):(?P<role_char>\w)\s+(?P<dt>\d+ \w+ \d+ \d{2}:\d{2}:\d{2}.\d+) (?P<level_symbol>.) (?P<message>.*)') ??
+          parse_regex(.message, r'^(?P<pid>\d+):(?P<role>\S+) \((?P<unix_timestamp>\d+)\) (?P<message>.*)') ??
+          {}
+      
+      if .redis != {} {
+        .platform = "Redis"
+        if .redis.role_char == "M" {
+          .redis.role = "master"
+        } else if .redis.role_char == "S" {
+          .redis.role = "slave"
+        } else if .redis.role_char == "C" {
+          .redis.role = "RDB/AOF writing child"
+        } else if .redis.role_char == "X" {
+          .redis.role = "sentinel"
+        }
+      
+        if .redis.level_symbol == "." {
+          .level = "debug"
+        } else if .redis.level_symbol == "-" {
+          .level = "verbose"
+        } else if .redis.level_symbol == "*" {
+          .level = "notice"
+        } else if .redis.level_symbol == "#" {
+          .level = "warning"
+        }
+      
+        .redis.pid = to_int(.redis.pid) ?? null
+      
+        if exists(.redis.dt) {
+          .dt = format_timestamp!(parse_timestamp(del(.redis.dt), "%d %b %Y %T%.f") ?? now(), "%+")
+        } else if exists(.redis.unix_timestamp) {
+          .dt = format_timestamp!(from_unix_timestamp(to_int!(del(.redis.unix_timestamp))) ?? now(), "%+")
+        }
+      
+        .message = del(.redis.message)
+      
+        # extract message metadata
+        tmp = string!(.message)
+        .message_metadata = {}
+        
+        ips = parse_regex_all!(tmp, r'\b(?P<ip>(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))\b')
+        if exists(ips[0].ip) { .message_metadata.ipv4_1 = ips[0].ip; tmp = replace(tmp, string!(ips[0].ip), "") }
+        if exists(ips[1].ip) { .message_metadata.ipv4_2 = ips[1].ip; tmp = replace(tmp, string!(ips[1].ip), "") }
+        if exists(ips[2].ip) { .message_metadata.ipv4_3 = ips[2].ip; tmp = replace(tmp, string!(ips[2].ip), "") }
+        if exists(ips[3].ip) { .message_metadata.ipv4_4 = ips[3].ip; tmp = replace(tmp, string!(ips[3].ip), "") }
+        if exists(ips[4].ip) { .message_metadata.ipv4_5 = ips[4].ip; tmp = replace(tmp, string!(ips[4].ip), "") }
+        
+        # we match only full IPv6 addresses
+        ipv6s = parse_regex_all!(tmp, r'\b(?P<ip>(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4})\b')
+        if exists(ipv6s[0].ip) { .message_metadata.ipv6_1 = ipv6s[0].ip; tmp = replace(tmp, string!(ipv6s[0].ip), "") }
+        if exists(ipv6s[1].ip) { .message_metadata.ipv6_2 = ipv6s[1].ip; tmp = replace(tmp, string!(ipv6s[1].ip), "") }
+        if exists(ipv6s[2].ip) { .message_metadata.ipv6_3 = ipv6s[2].ip; tmp = replace(tmp, string!(ipv6s[2].ip), "") }
+        if exists(ipv6s[3].ip) { .message_metadata.ipv6_4 = ipv6s[3].ip; tmp = replace(tmp, string!(ipv6s[3].ip), "") }
+        if exists(ipv6s[4].ip) { .message_metadata.ipv6_5 = ipv6s[4].ip; tmp = replace(tmp, string!(ipv6s[4].ip), "") }
+        
+        numbers = parse_regex_all!(tmp, r'(?P<num>\b\d+(?:\.\d+)?\b)')
+        if exists(numbers[0].num) { .message_metadata.param1 = to_int(numbers[0].num) ?? to_float(numbers[0].num) ?? null }
+        if exists(numbers[1].num) { .message_metadata.param2 = to_int(numbers[1].num) ?? to_float(numbers[1].num) ?? null }
+        if exists(numbers[2].num) { .message_metadata.param3 = to_int(numbers[2].num) ?? to_float(numbers[2].num) ?? null }
+        if exists(numbers[3].num) { .message_metadata.param4 = to_int(numbers[3].num) ?? to_float(numbers[3].num) ?? null }
+        if exists(numbers[4].num) { .message_metadata.param5 = to_int(numbers[4].num) ?? to_float(numbers[4].num) ?? null }
+        if exists(numbers[5].num) { .message_metadata.param6 = to_int(numbers[5].num) ?? to_float(numbers[5].num) ?? null }
+        if exists(numbers[6].num) { .message_metadata.param7 = to_int(numbers[6].num) ?? to_float(numbers[6].num) ?? null }
+        if exists(numbers[7].num) { .message_metadata.param8 = to_int(numbers[7].num) ?? to_float(numbers[7].num) ?? null }
+        if exists(numbers[8].num) { .message_metadata.param9 = to_int(numbers[8].num) ?? to_float(numbers[8].num) ?? null }
+        if exists(numbers[9].num) { .message_metadata.param10 = to_int(numbers[9].num) ?? to_float(numbers[9].num) ?? null }
+      
+      } else {
+        del(.redis)
+      }
+
+  redis_metrics_parser:
+    type: "remap"
+    inputs: 
+      - "redis_metrics_source"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+
+
 sinks:
   
   better_stack_nginx_logs_sink:
@@ -368,6 +448,29 @@ sinks:
       token: "${VECTOR_RABBITMQ_METRICS_BEARER_TOKEN}"
     inputs: ["rabbitmq_metrics_parser"]
 
+  better_stack_redis_metrics_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/metrics"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${VECTOR_REDIS_METRICS_BEARER_TOKEN}"
+    inputs: ["redis_metrics_parser"]
+
+
+  better_stack_redis_logs_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${VECTOR_REDIS_LOGS_BEARER_TOKEN}"
+    inputs: ["redis_log_parser"]
+
 # ,"host_metrics_source"
 
   # better_stack_docker_logs_sink:
@@ -381,12 +484,12 @@ sinks:
   #     token: "${VECTOR_DOCKER_LOGS_BEARER_TOKEN}"
   #   inputs: ["docker_logs_source"]
 
-  test:
-    inputs:
-      - nginx_logs_parser
-    type: console
-    encoding:
-      codec: "json"
+  # test:
+  #   inputs:
+  #     - nginx_logs_parser
+  #   type: console
+  #   encoding:
+  #     codec: "json"
 
 
   # test2:
