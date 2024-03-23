@@ -1,8 +1,8 @@
 
 sources:
   # Docker
-  # docker_logs_source:
-  #   type: "docker_logs"
+  docker_logs_source:
+    type: "docker_logs"
   
   docker_stats_source:
     type: "exec"
@@ -11,49 +11,79 @@ sources:
       codec: "bytes"
     mode: "scheduled"
     scheduled:
-      exec_interval_secs: 30
+      exec_interval_secs: 60
 
   
-  rabbitmq_logs_source
-    type: "file"
-    read_from: "beginning"
-    ignore_older_secs: 600
-    include: ["/var/log/rabbitmq/*.log"]
-    exclude: []
+  # rabbitmq_logs_source
+  #   type: "file"
+  #   read_from: "beginning"
+  #   ignore_older_secs: 600
+  #   include: ["/var/log/rabbitmq/*.log"]
+  #   exclude: []
   
   rabbitmq_metrics_source:
     type: "prometheus_scrape"
     endpoints:
-      - "http://127.20.0.1:15692/metrics" # Endpoint exposing RabbitMQ metrics
-    scrape_interval_secs: 30             # Define how often to scrape
+      - "http://rabbitmq:15692/metrics" # Endpoint exposing RabbitMQ metrics
+    scrape_interval_secs: 60             # Define how often to scrape
 
   # Nginx
-  nginx_logs_source:
-    type: "file"
-    read_from: "beginning"
-    ignore_older_secs: 600
-    include: ["/var/log/nginx/*.log"]
-    exclude: []
+  # nginx_logs_source:
+  #   type: "file"
+  #   read_from: "beginning"
+  #   ignore_older_secs: 600
+  #   include: ["/var/log/nginx/*.log"]
+  #   exclude: []
 
   nginx_metrics_source:
     type: "nginx_metrics"
     endpoints:
-      - "http://172.20.0.1/nginx_status" # endpoint exposing Nginx metrics: http://nginx.org/en/docs/http/ngx_http_stub_status_module.html
-    scrape_interval_secs: 30 # Define how often to scrape
+      # endpoint exposing Nginx metrics: http://nginx.org/en/docs/http/ngx_http_stub_status_module.html
+      - "http://nginx-https/nginx_status"
+    scrape_interval_secs: 60 # Define how often to scrape
 
   # Host metrics
-  host_metrics_source:
-    type: "host_metrics"
-    scrape_interval_secs: 30
+  # host_metrics_source:
+  #   type: "host_metrics"
+  #   scrape_interval_secs: 30
 
 
 transforms:
-  
 
+  # Remove a bunch of docker-specific fields. This is supposed to be more like "raw" logs from the service.
+  docker_logs_cleaner:
+    type: "remap"
+    inputs:
+      - docker_logs_source
+    
+    source: |
+      .dc_service = .label."com.docker.compose.service"
+      del(.label)
+      del(.container_created_at)
+      del(.container_id)
+      del(.host)
+      del(.image)
+
+  # Route logs to the appropriate parser based on the service name
+  docker_logs_router:
+    type: route
+    inputs:
+      - docker_logs_cleaner
+    route:
+      nginx_http_logs: .dc_service == "nginx-http"
+      nginx_https_logs: .dc_service == "nginx-https"
+      certbot_logs: .dc_service == "certbot"
+      rabbitmq_logs: .dc_service == "rabbitmq"
+      qdrant_logs: .dc_service == "qdrant"
+      imgproxy_logs: .dc_service == "imgproxy"
+
+
+  # Parse nginx logs, both http and https nginx services.
   nginx_logs_parser:
     type: "remap"
     inputs:
-      - "nginx_logs_source"
+      - docker_logs_router.nginx_http_logs
+      - docker_logs_router.nginx_https_logs
     source: |
       del(.source_type)
       .dt = del(.timestamp)
@@ -93,16 +123,13 @@ transforms:
         del(.nginx)
       }
 
-
   nginx_metrics_parser:
     type: "remap"
     inputs:
-      - "nginx_metrics_source"
+      - nginx_metrics_source
     source: |
       del(.source_type)
       .dt = del(.timestamp)
-
-
 
   docker_metrics_parser:
     type: "remap"
@@ -231,6 +258,69 @@ transforms:
       }
 
 
+  rabbitmq_log_parser:
+    type: "remap"
+    inputs: 
+      - "docker_logs_router.rabbitmq_logs"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+      del(.source_type)
+      .dt = del(.timestamp)
+      .rabbitmq = parse_regex(
+          .message,
+          r'^(?P<dt>\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2}\.\d{6}\+\d{2}:\d{2}) \[(?P<level>\w+)\] <(?P<pid>[0-9\.]+)> (?P<message>.+)$'
+      ) ?? {}
+      
+      if .rabbitmq != {} {
+        .platform = "RabbitMQ"
+        if exists(.rabbitmq.level) { .level = downcase(to_string(del(.rabbitmq.level))) }
+        if exists(.rabbitmq.message) { .message = del(.rabbitmq.message) }
+        if exists(.rabbitmq.dt) { .dt = del(.rabbitmq.dt) }
+        
+          # extract message metadata
+        tmp = string!(.message)
+        .message_metadata = {}
+        
+        ips = parse_regex_all!(tmp, r'\b(?P<ip>(?:(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?)\.){3}(?:25[0-5]|2[0-4][0-9]|[01]?[0-9][0-9]?))\b')
+        if exists(ips[0].ip) { .message_metadata.ipv4_1 = ips[0].ip; tmp = replace(tmp, string!(ips[0].ip), "") }
+        if exists(ips[1].ip) { .message_metadata.ipv4_2 = ips[1].ip; tmp = replace(tmp, string!(ips[1].ip), "") }
+        if exists(ips[2].ip) { .message_metadata.ipv4_3 = ips[2].ip; tmp = replace(tmp, string!(ips[2].ip), "") }
+        if exists(ips[3].ip) { .message_metadata.ipv4_4 = ips[3].ip; tmp = replace(tmp, string!(ips[3].ip), "") }
+        if exists(ips[4].ip) { .message_metadata.ipv4_5 = ips[4].ip; tmp = replace(tmp, string!(ips[4].ip), "") }
+        
+        # we match only full IPv6 addresses
+        ipv6s = parse_regex_all!(tmp, r'\b(?P<ip>(?:[a-fA-F0-9]{1,4}:){7}[a-fA-F0-9]{1,4})\b')
+        if exists(ipv6s[0].ip) { .message_metadata.ipv6_1 = ipv6s[0].ip; tmp = replace(tmp, string!(ipv6s[0].ip), "") }
+        if exists(ipv6s[1].ip) { .message_metadata.ipv6_2 = ipv6s[1].ip; tmp = replace(tmp, string!(ipv6s[1].ip), "") }
+        if exists(ipv6s[2].ip) { .message_metadata.ipv6_3 = ipv6s[2].ip; tmp = replace(tmp, string!(ipv6s[2].ip), "") }
+        if exists(ipv6s[3].ip) { .message_metadata.ipv6_4 = ipv6s[3].ip; tmp = replace(tmp, string!(ipv6s[3].ip), "") }
+        if exists(ipv6s[4].ip) { .message_metadata.ipv6_5 = ipv6s[4].ip; tmp = replace(tmp, string!(ipv6s[4].ip), "") }
+        
+        numbers = parse_regex_all!(tmp, r'(?P<num>\b\d+(?:\.\d+)?\b)')
+        if exists(numbers[0].num) { .message_metadata.param1 = to_int(numbers[0].num) ?? to_float(numbers[0].num) ?? null }
+        if exists(numbers[1].num) { .message_metadata.param2 = to_int(numbers[1].num) ?? to_float(numbers[1].num) ?? null }
+        if exists(numbers[2].num) { .message_metadata.param3 = to_int(numbers[2].num) ?? to_float(numbers[2].num) ?? null }
+        if exists(numbers[3].num) { .message_metadata.param4 = to_int(numbers[3].num) ?? to_float(numbers[3].num) ?? null }
+        if exists(numbers[4].num) { .message_metadata.param5 = to_int(numbers[4].num) ?? to_float(numbers[4].num) ?? null }
+        if exists(numbers[5].num) { .message_metadata.param6 = to_int(numbers[5].num) ?? to_float(numbers[5].num) ?? null }
+        if exists(numbers[6].num) { .message_metadata.param7 = to_int(numbers[6].num) ?? to_float(numbers[6].num) ?? null }
+        if exists(numbers[7].num) { .message_metadata.param8 = to_int(numbers[7].num) ?? to_float(numbers[7].num) ?? null }
+        if exists(numbers[8].num) { .message_metadata.param9 = to_int(numbers[8].num) ?? to_float(numbers[8].num) ?? null }
+        if exists(numbers[9].num) { .message_metadata.param10 = to_int(numbers[9].num) ?? to_float(numbers[9].num) ?? null }
+      
+      } else {
+        del(.rabbitmq)
+      }
+
+  rabbitmq_metrics_parser:
+    type: "remap"
+    inputs: 
+      - "rabbitmq_metrics_source"
+    source: |
+      del(.source_type)
+      .dt = del(.timestamp)
+
 sinks:
   
   better_stack_nginx_logs_sink:
@@ -253,8 +343,32 @@ sinks:
     auth:
       strategy: "bearer"
       token: "${VECTOR_NGINX_METRICS_BEARER_TOKEN}"
-    inputs: ["nginx_metrics_parser","host_metrics_source"]
+    inputs: ["nginx_metrics_parser"]
 
+
+  better_stack_rabbitmq_logs_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${VECTOR_RABBITMQ_LOGS_BEARER_TOKEN}"
+    inputs: ["rabbitmq_log_parser"]
+
+  better_stack_rabbitmq_metrics_sink:
+    type: "http"
+    method: "post"
+    uri: "https://in.logs.betterstack.com/metrics"
+    encoding:
+      codec: "json"
+    auth:
+      strategy: "bearer"
+      token: "${VECTOR_RABBITMQ_METRICS_BEARER_TOKEN}"
+    inputs: ["rabbitmq_metrics_parser"]
+
+# ,"host_metrics_source"
 
   # better_stack_docker_logs_sink:
   #   type: "http"
@@ -264,8 +378,26 @@ sinks:
   #     codec: "json"
   #   auth:
   #     strategy: "bearer"
-  #     token: ""
-  #   inputs: ["docker_logs_parser"]
+  #     token: "${VECTOR_DOCKER_LOGS_BEARER_TOKEN}"
+  #   inputs: ["docker_logs_source"]
+
+  test:
+    inputs:
+      - nginx_logs_parser
+    type: console
+    encoding:
+      codec: "json"
+
+
+  # test2:
+  #     inputs:
+  #       - docker_logs_source
+  #     type: console
+  #     encoding:
+  #       codec: "json"
+
+
+
 
   better_stack_docker_metrics_sink:
     type: "http"
@@ -276,5 +408,5 @@ sinks:
     auth:
       strategy: "bearer"
       token: "${VECTOR_DOCKER_METRICS_BEARER_TOKEN}"
-    inputs: ["docker_metrics_parser","host_metrics_source"]
-
+    inputs: ["docker_metrics_parser"]
+# "host_metrics_source"

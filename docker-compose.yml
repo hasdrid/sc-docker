@@ -11,15 +11,24 @@ services:
   
   # Collects logs from all the other services
   # XXX Collect logs from vector itself?
-  # vector:
-  #   build:
-  #     context: ./vector
-  #   networks:
-  #     - my-custom-network
-  #   restart: unless-stopped
-  #   volumes:
-  #     - /var/run/docker.sock:/var/run/docker.sock
-  #     - ./vector/vector.yaml:/etc/vector/vector.yaml
+  vector:
+    build:
+      context: ./vector
+    environment:
+      VECTOR_NGINX_LOGS_BEARER_TOKEN: ${VECTOR_NGINX_LOGS_BEARER_TOKEN}
+      VECTOR_NGINX_METRICS_BEARER_TOKEN: ${VECTOR_NGINX_METRICS_BEARER_TOKEN}
+      VECTOR_DOCKER_METRICS_BEARER_TOKEN: ${VECTOR_DOCKER_METRICS_BEARER_TOKEN}
+      VECTOR_DOCKER_LOGS_BEARER_TOKEN: ${VECTOR_DOCKER_LOGS_BEARER_TOKEN}
+      VECTOR_RABBITMQ_METRICS_BEARER_TOKEN: ${VECTOR_RABBITMQ_METRICS_BEARER_TOKEN}
+      VECTOR_RABBITMQ_LOGS_BEARER_TOKEN: ${VECTOR_RABBITMQ_LOGS_BEARER_TOKEN}
+      VECROR_REDIS_METRICS_BEARER_TOKEN: ${VECROR_REDIS_METRICS_BEARER_TOKEN}
+      VECTOR_REDIS_LOGS_BEARER_TOKEN: ${VECTOR_REDIS_LOGS_BEARER_TOKEN}
+    restart: unless-stopped
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - ./vector/vector.yaml:/etc/vector/vector.yaml
+    networks:
+      - my-custom-network
 
 
   imgproxy:
