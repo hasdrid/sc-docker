@@ -37,7 +37,7 @@ echo "Obtaining certificates for domains: $CERTBOT_DOMAINS"
 
 # Execute the initial certbot command for obtaining certificates
 # Added --non-interactive and --keep-until-expiring to handle existing certs gracefully
-certbot certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email --staging  ${DOMAIN_ARGS} --non-interactive --keep-until-expiring
+certbot certonly --webroot --webroot-path=/var/www/certbot --email ${CERTBOT_EMAIL} --agree-tos --no-eff-email ${DOMAIN_ARGS} --non-interactive --keep-until-expiring
 for CONTAINER in ${CERTBOT_RESTART_CONTAINERS};
     do echo "Restarting $CONTAINER...";
     # true to not exit this script if the container is not running
