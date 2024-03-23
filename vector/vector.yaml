@@ -41,9 +41,6 @@ sources:
       - "http://172.20.0.1/nginx_status" # endpoint exposing Nginx metrics: http://nginx.org/en/docs/http/ngx_http_stub_status_module.html
     scrape_interval_secs: 30 # Define how often to scrape
 
-  
-  
-
   # Host metrics
   host_metrics_source:
     type: "host_metrics"
@@ -244,7 +241,7 @@ sinks:
       codec: "json"
     auth:
       strategy: "bearer"
-      token: "${NGINX_LOGS_BEARER_TOKEN}"
+      token: "${VECTOR_NGINX_LOGS_BEARER_TOKEN}"
     inputs: ["nginx_logs_parser"]
 
   better_stack_nginx_metrics_sink:
@@ -255,7 +252,7 @@ sinks:
       codec: "json"
     auth:
       strategy: "bearer"
-      token: "${NGINX_METRICS_BEARER_TOKEN}"
+      token: "${VECTOR_NGINX_METRICS_BEARER_TOKEN}"
     inputs: ["nginx_metrics_parser","host_metrics_source"]
 
 
@@ -278,6 +275,6 @@ sinks:
       codec: "json"
     auth:
       strategy: "bearer"
-      token: "${DOCKER_METRICS_BEARER_TOKEN}"
+      token: "${VECTOR_DOCKER_METRICS_BEARER_TOKEN}"
     inputs: ["docker_metrics_parser","host_metrics_source"]
 

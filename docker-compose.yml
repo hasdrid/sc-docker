@@ -1,25 +1,116 @@
 version: '3'
 services:
+
+  # This is used to admin / debug stuff
+  ubuntu:
+    build:
+      context: ./ubuntu
+    restart: unless-stopped
+    networks:
+      - my-custom-network
+  
+  # Collects logs from all the other services
+  # XXX Collect logs from vector itself?
+  # vector:
+  #   build:
+  #     context: ./vector
+  #   networks:
+  #     - my-custom-network
+  #   restart: unless-stopped
+  #   volumes:
+  #     - /var/run/docker.sock:/var/run/docker.sock
+  #     - ./vector/vector.yaml:/etc/vector/vector.yaml
+
+
   imgproxy:
     build:
       context: ./imgproxy
-      dockerfile: Dockerfile
     restart: unless-stopped
-    ports:
-      - "8080:8080"
+    networks:
+      - my-custom-network
 
   redis:
     image: "redis:6-alpine"
     restart: unless-stopped
     ports:
-      - "6379:6379"
+      - 6379:6379
 
   qdrant:
     image: "qdrant/qdrant"
     restart: unless-stopped
     ports:
-      - "6333:6333"
+      - 6333:6333
     volumes:
       - /app/data/qdrant:/qdrant/storage
 
+  rabbitmq:
+    build:
+      context: ./rabbitmq
+    restart: unless-stopped
+    ports:
+      - 5671:5671
+      - 127.0.0.1:15672:15672 # RabbitMQ management. Accessible only from localhost
+    volumes:
+      - /etc/letsencrypt/live/${RABBITMQ_DOMAIN}/fullchain.pem:/etc/ssl/certs/rabbitmq/fullchain.pem
+      - /etc/letsencrypt/live/${RABBITMQ_DOMAIN}/privkey.pem:/etc/ssl/certs/rabbitmq/privkey.pem
+    environment:
+      ADMIN_PASSWORD: ${RABBITMQ_ADMIN_PASSWORD}
+      SERVER_PASSWORD: ${RABBITMQ_SERVER_PASSWORD}
+      WORKER_PASSWORD: ${RABBITMQ_WORKER_PASSWORD}
+      DOMAIN: ${RABBITMQ_DOMAIN}
+    networks:
+      - my-custom-network
+
+  # This simple nginx is only used to serve the challenge files for certbot and to redirect http to https
+  nginx-http:
+    image: nginx
+    ports:
+      - 80:80
+    volumes:
+      - ./data/certbot/www:/var/www/certbot:ro
+      - ./nginx-http/default.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - my-custom-network
+
+  certbot:
+    build:
+      context: ./certbot
+    environment:
+      - CERTBOT_EMAIL=${CERTBOT_EMAIL}
+      - CERTBOT_DOMAINS=${CERTBOT_DOMAINS}
+      - CERTBOT_RESTART_CONTAINERS=${CERTBOT_RESTART_CONTAINERS}
+    volumes:
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./data/certbot/www:/var/www/certbot
+      - /var/run/docker.sock:/var/run/docker.sock
+    depends_on:
+      - nginx-http
+    networks:
+      - my-custom-network
+
+  # This nginx is used to serve the actual API via https. It needs the 
+  nginx-https:
+    image: nginx
+    ports:
+      - 443:443
+    volumes:
+      - ./data/certbot/conf:/etc/letsencrypt
+      - ./nginx-https/default.conf.template:/etc/nginx/templates/default.conf.template
+    environment:
+      - NGINX_HTTPS_SERVER_NAME=${NGINX_HTTPS_SERVER_NAME}
+    networks:
+      - my-custom-network
+    depends_on:
+      - certbot
+
+networks:
+  my-custom-network:
+    driver: bridge
+    ipam:
+      driver: default
+      config:
+        - subnet: "172.20.0.0/16"
+          gateway: "172.20.0.1"
+        # - subnet: "2001:db8::/64"
+        #   gateway: "2001:db8::1"
 
