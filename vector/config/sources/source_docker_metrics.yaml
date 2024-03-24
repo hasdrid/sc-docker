@@ -1,0 +1,7 @@
+type: "exec"
+command: [ "docker", "stats", "--format", "json", "--no-stream" ]
+decoding:
+  codec: "bytes"
+mode: "scheduled"
+scheduled:
+  exec_interval_secs: 60

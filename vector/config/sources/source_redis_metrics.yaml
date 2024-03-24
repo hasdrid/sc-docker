@@ -1,0 +1,4 @@
+type: "prometheus_scrape"
+endpoints:
+  - "http://redis_exporter:9121/metrics"
+scrape_interval_secs: 60

@@ -1,0 +1,10 @@
+type: "http"
+method: "post"
+uri: "https://in.logs.betterstack.com/"
+encoding:
+  codec: "json"
+auth:
+  strategy: "bearer"
+  token: "${VECTOR_REDIS_LOGS_BEARER_TOKEN}"
+inputs:
+  - transform_redis_logs

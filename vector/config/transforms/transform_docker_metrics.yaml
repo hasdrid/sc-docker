@@ -1,0 +1,124 @@
+type: "remap"
+inputs: 
+  - source_docker_metrics
+source: |
+  del(.source_type)
+  .dt = del(.timestamp)
+  raw_data = .message
+  dt = .timestamp
+  host = .host
+  pid = .pid
+  
+  . = []
+  data, err = parse_json(strip_ansi_escape_codes(string!(raw_data)))
+  if err == null {
+    container_id = data.Container
+    container_name = data.Name
+  
+    gauges = {
+      "cpu_percentage": to_float(replace(data.CPUPerc, "%", "") ?? "") ?? null,
+      "memory_percentage": to_float(replace(data.MemPerc, "%", "") ?? "") ?? null,
+      "memory_used_bytes": split(data.MemUsage, " / ")[0] ?? null,
+      "memory_limit_bytes": split(data.MemUsage, " / ")[1] ?? null,
+      "pids_count": to_int(data.PIDs) ?? null
+    }
+  
+    counters = {
+      "block_in_bytes": split(data.BlockIO, " / ")[0] ?? null,
+      "block_out_bytes": split(data.BlockIO, " / ")[1] ?? null,
+      "network_in_bytes": split(data.NetIO, " / ")[0] ?? null,
+      "network_out_bytes": split(data.NetIO, " / ")[1] ?? null
+    }
+  
+    gauges_bytes = map_values(gauges) -> |data| {
+      if !is_string(data) {
+        data
+      } else {
+        data = string!(data)
+        if !ends_with(data, "B") {
+          data
+        } else if ends_with(data, "TiB") {
+          round(1024 * 1024 * 1024 * 1024 * to_float(replace(data, "TiB", "")) ?? null) ?? null
+        } else if ends_with(data, "GiB") {
+          round(1024 * 1024 * 1024 * to_float(replace(data, "GiB", "")) ?? null) ?? null
+        } else if ends_with(data, "MiB") {
+          round(1024 * 1024 * to_float(replace(data, "MiB", "")) ?? null) ?? null
+        } else if ends_with(data, "KiB") {
+          round(1024 * to_float(replace(data, "KiB", "")) ?? null) ?? null
+        } else if ends_with(data, "TB") {
+          round(1000 * 1000 * 1000 * 1000 * to_float(replace(data, "TB", "")) ?? null) ?? null
+        } else if ends_with(data, "GB") {
+          round(1000 * 1000 * 1000 * to_float(replace(data, "GB", "")) ?? null) ?? null
+        } else if ends_with(data, "MB") {
+          round(1000 * 1000 * to_float(replace(data, "MB", "")) ?? null) ?? null
+        } else if ends_with(data, "kB") {
+          round(1000 * to_float(replace(data, "kB", "")) ?? null) ?? null
+        } else {
+          round(to_int(replace(data, "B", "")) ?? null) ?? null
+        }
+      }
+    }
+  
+    counters_bytes = map_values(counters) -> |data| {
+      if !is_string(data) {
+        data
+      } else {
+        data = string!(data)
+        if !ends_with(data, "B") {
+          data
+        } else if ends_with(data, "TiB") {
+          round(1024 * 1024 * 1024 * 1024 * to_float(replace(data, "TiB", "")) ?? null) ?? null
+        } else if ends_with(data, "GiB") {
+          round(1024 * 1024 * 1024 * to_float(replace(data, "GiB", "")) ?? null) ?? null
+        } else if ends_with(data, "MiB") {
+          round(1024 * 1024 * to_float(replace(data, "MiB", "")) ?? null) ?? null
+        } else if ends_with(data, "KiB") {
+          round(1024 * to_float(replace(data, "KiB", "")) ?? null) ?? null
+        } else if ends_with(data, "TB") {
+          round(1000 * 1000 * 1000 * 1000 * to_float(replace(data, "TB", "")) ?? null) ?? null
+        } else if ends_with(data, "GB") {
+          round(1000 * 1000 * 1000 * to_float(replace(data, "GB", "")) ?? null) ?? null
+        } else if ends_with(data, "MB") {
+          round(1000 * 1000 * to_float(replace(data, "MB", "")) ?? null) ?? null
+        } else if ends_with(data, "kB") {
+          round(1000 * to_float(replace(data, "kB", "")) ?? null) ?? null
+        } else {
+          round(to_int(replace(data, "B", "")) ?? null) ?? null
+        }
+      }
+    }
+  
+    for_each(gauges_bytes) -> |name, value| {
+      . = push(., {
+        "name": name,
+        "kind": "absolute",
+        "gauge": {
+          "value": value
+        },
+        "tags": {
+          "pid": to_string!(pid),
+          "host": to_string!(host),
+          "container_id": to_string!(container_id),
+          "container_name": to_string!(container_name)
+        },
+        "dt": dt
+      })
+    }
+  
+    for_each(counters_bytes) -> |name, value| {
+      . = push(., {
+        "name": name,
+        "kind": "absolute",
+        "counter": {
+          "value": value
+        },
+        "tags": {
+          "pid": to_string!(pid),
+          "host": to_string!(host),
+          "container_id": to_string!(container_id),
+          "container_name": to_string!(container_name)
+        },
+        "dt": dt
+      })
+    }
+  }

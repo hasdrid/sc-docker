@@ -1,0 +1,10 @@
+type: "http"
+method: "post"
+uri: "https://in.logs.betterstack.com/metrics"
+encoding:
+  codec: "json"
+auth:
+  strategy: "bearer"
+  token: "${VECTOR_RABBITMQ_METRICS_BEARER_TOKEN}"
+inputs:
+  - transform_rabbitmq_metrics

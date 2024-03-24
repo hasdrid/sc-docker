@@ -23,13 +23,14 @@ services:
       VECTOR_RABBITMQ_LOGS_BEARER_TOKEN: ${VECTOR_RABBITMQ_LOGS_BEARER_TOKEN}
       VECTOR_REDIS_METRICS_BEARER_TOKEN: ${VECTOR_REDIS_METRICS_BEARER_TOKEN}
       VECTOR_REDIS_LOGS_BEARER_TOKEN: ${VECTOR_REDIS_LOGS_BEARER_TOKEN}
+      VECTOR_MISC_LOGS_BEARER_TOKEN: ${VECTOR_MISC_LOGS_BEARER_TOKEN}
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
-      - ./vector/vector.yaml:/etc/vector/vector.yaml
+      - ./vector/config/:/etc/vector/
     networks:
       - my-custom-network
-
+    command: ["--config-dir", "/etc/vector"]
 
   imgproxy:
     build:

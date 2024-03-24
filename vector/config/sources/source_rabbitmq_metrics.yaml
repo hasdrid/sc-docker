@@ -1,0 +1,4 @@
+type: "prometheus_scrape"
+endpoints:
+  - "http://rabbitmq:15692/metrics"
+scrape_interval_secs: 60

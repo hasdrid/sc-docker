@@ -1,0 +1,6 @@
+type: "remap"
+inputs: 
+  - source_redis_metrics
+source: |
+  del(.source_type)
+  .dt = del(.timestamp)

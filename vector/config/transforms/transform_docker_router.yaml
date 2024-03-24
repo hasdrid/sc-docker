@@ -1,0 +1,15 @@
+# Route logs to the appropriate parser based on the service name
+
+type: route
+inputs:
+  - transform_docker_cleanup
+reroute_unmatched: true
+route:
+  nginx_http_logs: .dc_service == "nginx_http"
+  nginx_https_logs: .dc_service == "nginx_https"
+  # certbot_logs: .dc_service == "certbot"
+  rabbitmq_logs: .dc_service == "rabbitmq"
+  redis_logs: .dc_service == "redis"
+  # redis_exporter_logs: .dc_service == "redis_exporter"
+  # qdrant_logs: .dc_service == "qdrant"
+  # imgproxy_logs: .dc_service == "imgproxy"

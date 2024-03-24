@@ -1,0 +1,4 @@
+type: "nginx_metrics"
+endpoints:
+  - "http://nginx_https/nginx_status"
+scrape_interval_secs: 60

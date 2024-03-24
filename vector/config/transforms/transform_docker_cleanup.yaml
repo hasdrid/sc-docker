@@ -1,0 +1,12 @@
+# Remove a bunch of docker-specific fields. This is supposed to be more like "raw" logs from the services.
+type: "remap"
+inputs:
+  - source_docker_logs
+source: |
+  .dc_service = .label."com.docker.compose.service"
+  del(.label)
+  del(.container_created_at)
+  del(.container_id)
+  del(.host)
+  del(.image)
+
