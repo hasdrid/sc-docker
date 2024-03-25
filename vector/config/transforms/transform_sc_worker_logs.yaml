@@ -1,0 +1,6 @@
+type: "remap"
+inputs:
+  - transform_docker_router.sc_worker_logs
+# Do nothing for now
+source: .
+

@@ -1,0 +1,10 @@
+type: "http"
+method: "post"
+uri: "https://in.logs.betterstack.com/"
+encoding:
+  codec: "json"
+auth:
+  strategy: "bearer"
+  token: "${VECTOR_CERTBOT_LOGS_BEARER_TOKEN}"
+inputs:
+  - transform_certbot_logs
