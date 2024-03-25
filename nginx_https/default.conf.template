@@ -1,8 +1,6 @@
 proxy_cache_path /nginx-imgproxy-cache levels=1:2 keys_zone=imgproxy_cache:40m max_size=40g inactive=180d use_temp_path=off;
 resolver 127.0.0.11 valid=30s;
 
-
-
 server {
     # This server is used to expose the nginx status page.
     # Port 80 should not be exposed on the host, it will be
@@ -39,19 +37,28 @@ server {
 
   
 # HTTPS configuration
-    location / { proxy_pass http://127.0.0.1:8000; }
+    location / {
+        set $target_service http://go_server;
+        proxy_pass $target_service;
+    }
 #   location /oauth   { proxy_pass http://127.0.0.1:8001; }
 #   location /lang   { proxy_pass http://127.0.0.1:8002/; }
-    location /upload { proxy_pass http://127.0.0.1:8003; }
+    location /upload {
+        set $target_service http://go_uploadapi;
+        proxy_pass $target_service;
+    }
 
 
     location /ip/ {
-                # This is a trick to resolve the service name after nginx has started.
-                # Nginx would fail during startup if we just do `proxy_pass http://imgproxy:8080`
-                # and imgproxy does not resolve.
-                set $target_service http://imgproxy:8080;
-                proxy_pass $target_service;
-                proxy_cache imgproxy_cache;
-                proxy_cache_valid 200 180d;
+        # This is a trick to resolve the service name after nginx has started.
+        # Nginx would fail during startup if we just do `proxy_pass http://imgproxy`
+        # and imgproxy does not resolve.
+        set $target_service http://imgproxy;
+        # Rewrite the URL to remove the /ip/ prefix
+        rewrite ^/ip/(.*) /$1 break;
+        proxy_pass $target_service;
+        proxy_cache imgproxy_cache;
+        proxy_cache_valid 200 180d;
+
     }
 }

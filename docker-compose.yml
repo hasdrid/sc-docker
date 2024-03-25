@@ -36,6 +36,8 @@ services:
     build:
       context: ./imgproxy
     restart: unless-stopped
+    environment:
+      IMGPROXY_LOG_LEVEL: debug
     networks:
       - my-custom-network
 
@@ -61,10 +63,12 @@ services:
   qdrant:
     image: "qdrant/qdrant"
     restart: unless-stopped
-    ports:
-      - 6333:6333
+    # ports:
+    #   - 6333:6333
     volumes:
       - /app/data/qdrant:/qdrant/storage
+    networks:
+      - my-custom-network
 
   rabbitmq:
     build:
@@ -125,6 +129,55 @@ services:
       - my-custom-network
     depends_on:
       - certbot
+
+
+  go_server:
+    image: go_server:latest
+    restart: unless-stopped
+    env_file:
+      - ./sc_go/env_file.env
+    environment:
+      # It's only accessible as htto://go_server:80, not mapped to the host
+      - PORT=80
+    networks:
+      - my-custom-network
+
+  go_cron:
+    image: go_cron:latest
+    restart: unless-stopped
+    env_file:
+      - ./sc_go/env_file.env
+    networks:
+      - my-custom-network
+
+
+  go_uploadapi:
+    image: go_uploadapi:latest
+    restart: unless-stopped
+    env_file:
+      - ./sc_go/env_file.env
+    environment:
+      # It's only accessible as htto://go_uploadapi:80, not mapped to the host
+      - PORT=80
+    networks:
+      - my-custom-network
+
+  sc_worker:
+    image: sc_worker:latest
+    restart: unless-stopped
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+    env_file:
+      - ./sc_worker/env_file.env
+    networks:
+      - my-custom-network
+    volumes:
+      - /app/data/:/app/data/
 
 networks:
   my-custom-network:
