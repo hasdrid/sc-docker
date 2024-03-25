@@ -16,8 +16,6 @@ services:
       context: ./vector
     env_file:
       - ./vector/env_file.env
-
-
     restart: unless-stopped
     volumes:
       - /var/run/docker.sock:/var/run/docker.sock
@@ -52,7 +50,6 @@ services:
       - redis
     networks:
       - my-custom-network
-
 
   qdrant:
     image: "qdrant/qdrant"
@@ -128,10 +125,15 @@ services:
   go_server:
     image: go_server:latest
     restart: unless-stopped
+    depends_on:
+      - rabbitmq
+      - qdrant
+      - redis
+      - imgproxy
     env_file:
       - ./sc_go/env_file.env
     environment:
-      # It's only accessible as htto://go_server:80, not mapped to the host
+      # It's only accessible as http://go_server:80, not mapped to the host
       - PORT=80
     networks:
       - my-custom-network
@@ -151,11 +153,13 @@ services:
     env_file:
       - ./sc_go/env_file.env
     environment:
-      # It's only accessible as htto://go_uploadapi:80, not mapped to the host
+      # It's only accessible as http://go_uploadapi:80, not mapped to the host
       - PORT=80
     networks:
       - my-custom-network
 
+  # This is just one worker that runs on the same node as the rest of the stuff.
+  # It can generate images, and it also provides CLIP api to go server
   sc_worker:
     image: sc_worker:latest
     restart: unless-stopped
@@ -166,6 +170,8 @@ services:
             - driver: nvidia
               count: 1
               capabilities: [gpu]
+    depends_on:
+      - rabbitmq
     env_file:
       - ./sc_worker/env_file.env
     networks:
@@ -176,11 +182,11 @@ services:
 networks:
   my-custom-network:
     driver: bridge
-    ipam:
-      driver: default
-      config:
-        - subnet: "172.20.0.0/16"
-          gateway: "172.20.0.1"
+    # ipam:
+    #   driver: default
+    #   config:
+    #     - subnet: "172.20.0.0/16"
+    #       gateway: "172.20.0.1"
         # - subnet: "2001:db8::/64"
         #   gateway: "2001:db8::1"
 
